@@ -1,0 +1,38 @@
+jira:
+  base_url: "https://globaljira.example.com"
+  ca_bundle: null
+  pat_env: "JIRA_PAT"
+  page_size: 100
+  parallelism: 2
+  validate_query: true
+
+scopes:
+  - project: "ASPSCLM"
+    issue_types:
+      - name: "Feature"
+        fields:
+          - "summary"
+          - "issuetype"
+          - "priority"
+          - "labels"
+          - "assignee"
+          - "components"
+          - "fixVersions"
+          - "issuelinks"
+      - name: "Bug"
+        fields:
+          - "summary"
+          - "issuetype"
+          - "priority"
+          - "labels"
+          - "assignee"
+          - "components"
+          - "fixVersions"
+          - "issuelinks"
+
+windows:
+  initial_days: 90
+  safety_skew_s: 60
+
+database:
+  dsn_env: "DATABASE_URL"

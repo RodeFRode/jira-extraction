@@ -34,6 +34,15 @@ incremental operation, typed modules, and ease of local testing.
 
 2. **Configure environment variables**
 
+   Copy `.env.example` to `.env` and replace the placeholder values:
+
+   ```bash
+   cp .env.example .env
+   ```
+
+   The application loads this file automatically on startup.  Populate the
+   following variables with your credentials:
+
    - `JIRA_PAT`: Personal access token used for Jira authentication.
    - `DATABASE_URL`: PostgreSQL connection string that points to the reporting
      database where the schema from `sql/schema.sql` has been applied.

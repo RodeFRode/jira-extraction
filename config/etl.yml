@@ -1,6 +1,6 @@
 jira:
-  base_url: "https://globaljira.example.com"
-  ca_bundle: null
+  base_url_env: "JIRA_BASE_URL"
+  ca_bundle_env: "JIRA_CA_BUNDLE"
   pat_env: "JIRA_PAT"
   page_size: 100
   parallelism: 2
@@ -36,3 +36,7 @@ windows:
 
 database:
   dsn_env: "DATABASE_URL"
+
+output:
+  print_only_env: "JIRA_PRINT_ONLY"
+  print_only: false

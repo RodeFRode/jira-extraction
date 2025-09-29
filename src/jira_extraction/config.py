@@ -61,24 +61,84 @@ class WindowsConfig:
             raise ValueError(msg)
 
 
+def _parse_bool(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"1", "true", "t", "yes", "y", "on"}:
+            return True
+        if lowered in {"0", "false", "f", "no", "n", "off", ""}:
+            return False
+    return False
+
+
+@dataclass(slots=True)
+class OutputConfig:
+    """Configuration controlling how transformed data is emitted."""
+
+    print_only: bool = False
+    print_only_env: Optional[str] = "JIRA_PRINT_ONLY"
+
+    def __post_init__(self) -> None:
+        if isinstance(self.print_only_env, str):
+            env_name = self.print_only_env.strip()
+            if not env_name:
+                env_name = None
+        else:
+            env_name = None
+        if env_name:
+            env_value = os.getenv(env_name)
+            if env_value is not None:
+                self.print_only = _parse_bool(env_value)
+        self.print_only_env = env_name
+
+    def should_print_only(self) -> bool:
+        return bool(self.print_only)
+
+
 @dataclass(slots=True)
 class JiraConfig:
     """HTTP connectivity configuration for Jira."""
 
-    base_url: str
     pat_env: str
-    ca_bundle: Optional[str] = None
     page_size: int = 100
     parallelism: int = 2
     validate_query: bool = True
+    base_url: str | None = None
+    base_url_env: str | None = "JIRA_BASE_URL"
+    ca_bundle: str | bool | None = None
+    ca_bundle_env: str | None = "JIRA_CA_BUNDLE"
 
     def __post_init__(self) -> None:
-        if not self.base_url:
-            msg = "Jira configuration requires a base_url"
-            raise ValueError(msg)
+        self.base_url = self.base_url.strip() if isinstance(self.base_url, str) else self.base_url
+        self.base_url_env = self.base_url_env.strip() if isinstance(self.base_url_env, str) else self.base_url_env
+        self.ca_bundle_env = self.ca_bundle_env.strip() if isinstance(self.ca_bundle_env, str) else self.ca_bundle_env
         if not self.pat_env:
             msg = "Jira configuration requires a PAT environment variable name"
             raise ValueError(msg)
+        if not self.base_url:
+            if not self.base_url_env:
+                msg = "Jira configuration requires a base_url or base_url_env"
+                raise ValueError(msg)
+            token = os.getenv(self.base_url_env)
+            if token is not None:
+                token = token.strip()
+            if not token:
+                msg = f"Environment variable {self.base_url_env} is not set"
+                raise RuntimeError(msg)
+            self.base_url = token
+        if self.ca_bundle is None and self.ca_bundle_env:
+            env_value = os.getenv(self.ca_bundle_env)
+            if env_value is not None and env_value != "":
+                cleaned = env_value.strip()
+                lowered = cleaned.lower()
+                if lowered in {"false", "0", "no"}:
+                    self.ca_bundle = False
+                else:
+                    self.ca_bundle = cleaned
         if self.page_size <= 0:
             msg = "Page size must be positive"
             raise ValueError(msg)
@@ -118,6 +178,7 @@ class AppConfig:
     scopes: Sequence[ScopeConfig]
     windows: WindowsConfig = field(default_factory=WindowsConfig)
     database: Optional[DatabaseConfig] = None
+    output: OutputConfig = field(default_factory=OutputConfig)
 
     def iter_issue_type_scopes(self) -> Iterable[tuple[ScopeConfig, IssueTypeConfig]]:
         """Iterate over every project/issue type combination."""
@@ -176,13 +237,38 @@ def load_config(path: Path | str) -> AppConfig:
     if not isinstance(jira, Mapping):
         msg = "Configuration requires a 'jira' mapping"
         raise ValueError(msg)
+    base_url_raw = jira.get("base_url")
+    if base_url_raw is None:
+        base_url: str | None = None
+    else:
+        base_url = str(base_url_raw).strip()
+        if not base_url:
+            base_url = None
+    base_url_env_raw = jira.get("base_url_env")
+    if base_url_env_raw is None:
+        base_url_env: str | None = "JIRA_BASE_URL"
+    else:
+        base_url_env = str(base_url_env_raw)
+        if not base_url_env.strip():
+            base_url_env = None
+    ca_bundle = jira.get("ca_bundle")
+    ca_bundle_env_raw = jira.get("ca_bundle_env")
+    if ca_bundle_env_raw is None:
+        ca_bundle_env: str | None = "JIRA_CA_BUNDLE"
+    else:
+        ca_bundle_env = str(ca_bundle_env_raw)
+        if not ca_bundle_env.strip():
+            ca_bundle_env = None
+
     jira_config = JiraConfig(
-        base_url=str(jira["base_url"]),
         pat_env=str(jira.get("pat_env", "JIRA_PAT")),
-        ca_bundle=jira.get("ca_bundle"),
         page_size=int(jira.get("page_size", 100)),
         parallelism=int(jira.get("parallelism", 2)),
         validate_query=bool(jira.get("validate_query", True)),
+        base_url=base_url,
+        base_url_env=base_url_env,
+        ca_bundle=ca_bundle,
+        ca_bundle_env=ca_bundle_env,
     )
 
     raw_scopes = data.get("scopes")
@@ -205,7 +291,23 @@ def load_config(path: Path | str) -> AppConfig:
     if isinstance(database_raw, Mapping):
         database = DatabaseConfig(dsn_env=str(database_raw.get("dsn_env", "DATABASE_URL")))
 
-    return AppConfig(jira=jira_config, scopes=tuple(scopes), windows=windows, database=database)
+    output_raw = data.get("output")
+    if isinstance(output_raw, Mapping):
+        env_name = output_raw.get("print_only_env", "JIRA_PRINT_ONLY")
+        output = OutputConfig(
+            print_only=_parse_bool(output_raw.get("print_only", False)),
+            print_only_env=str(env_name) if env_name is not None else None,
+        )
+    else:
+        output = OutputConfig()
+
+    return AppConfig(
+        jira=jira_config,
+        scopes=tuple(scopes),
+        windows=windows,
+        database=database,
+        output=output,
+    )
 
 
 def scope_name(project: str, issue_type: str) -> str:
@@ -219,6 +321,7 @@ __all__ = [
     "DatabaseConfig",
     "IssueTypeConfig",
     "JiraConfig",
+    "OutputConfig",
     "ScopeConfig",
     "WindowsConfig",
     "load_config",

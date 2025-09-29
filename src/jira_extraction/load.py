@@ -1,8 +1,12 @@
-"""Load transformed Jira data into Postgres."""
+"""Load transformed Jira data into Postgres or alternative sinks."""
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Sequence
+import json
+import sqlite3
+from dataclasses import asdict, dataclass
+import sys
+from pathlib import Path
+from typing import IO, Sequence
 
 import psycopg
 from psycopg.types.json import Json
@@ -39,6 +43,27 @@ class PostgresLoader:
                         stats.issues += 1
                     stats.links += self._upsert_links(conn, transforms)
                     stats.changes += self._insert_changes(cur, transforms)
+        return stats
+
+
+class ConsoleLoader:
+    """Emit transformed issues to the console instead of persisting them."""
+
+    def __init__(self, *, stream: IO[str] | None = None, indent: int = 2) -> None:
+        self._stream = stream or sys.stdout
+        self._indent = indent
+
+    def load_page(self, transforms: Sequence[IssueTransform]) -> LoadStats:
+        stats = LoadStats()
+        for transform in transforms:
+            payload = asdict(transform)
+            json.dump(payload, self._stream, indent=self._indent, default=str)
+            self._stream.write("\n")
+            stats.issues += 1
+            stats.links += len(transform.links)
+            stats.changes += len(transform.changes)
+        if transforms:
+            self._stream.flush()
         return stats
 
     # Dimension helpers -------------------------------------------------
@@ -246,6 +271,64 @@ class PostgresLoader:
         return inserted
 
 
+class SQLiteLoader:
+    """Persist issue transforms into a local SQLite database."""
+
+    def __init__(self, path: str | Path) -> None:
+        self._path = Path(path)
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        self._ensure_schema()
+
+    def load_page(self, transforms: Sequence[IssueTransform]) -> LoadStats:
+        stats = LoadStats()
+        if not transforms:
+            return stats
+
+        with sqlite3.connect(self._path) as conn:
+            for transform in transforms:
+                issue_id = _to_int(transform.issue.get("issue_id"))
+                if issue_id is None:
+                    msg = "Issue transform is missing an issue_id"
+                    raise ValueError(msg)
+                payload = json.dumps(
+                    {
+                        "issue": transform.issue,
+                        "labels": transform.labels,
+                        "components": transform.components,
+                        "fix_versions": transform.fix_versions,
+                        "links": transform.links,
+                        "changes": transform.changes,
+                    },
+                    ensure_ascii=False,
+                )
+                conn.execute(
+                    "INSERT OR REPLACE INTO issue_transforms (issue_id, issue_key, payload) VALUES (?, ?, ?)",
+                    (issue_id, transform.issue.get("issue_key"), payload),
+                )
+                stats.issues += 1
+                stats.links += len(transform.links)
+                stats.changes += len(transform.changes)
+            conn.commit()
+
+        return stats
+
+    def _ensure_schema(self) -> None:
+        with sqlite3.connect(self._path) as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS issue_transforms (
+                    issue_id INTEGER PRIMARY KEY,
+                    issue_key TEXT,
+                    payload TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS ix_issue_transforms_issue_key ON issue_transforms(issue_key)"
+            )
+            conn.commit()
+
+
 def _to_int(value: object) -> int | None:
     try:
         if value is None:
@@ -255,4 +338,4 @@ def _to_int(value: object) -> int | None:
         return None
 
 
-__all__ = ["LoadStats", "PostgresLoader"]
+__all__ = ["LoadStats", "PostgresLoader", "SQLiteLoader", "ConsoleLoader"]

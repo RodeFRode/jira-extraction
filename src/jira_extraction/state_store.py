@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import logging
+import sqlite3
+from pathlib import Path
 from dataclasses import dataclass
 from typing import Any, Dict, Mapping, Optional, Protocol
 
@@ -106,4 +108,64 @@ class PostgresStateStore:
             conn.commit()
 
 
-__all__ = ["Cursor", "StateStore", "InMemoryStateStore", "PostgresStateStore"]
+class SQLiteStateStore:
+    """Persist ETL cursor information inside a local SQLite database."""
+
+    def __init__(self, path: str | Path) -> None:
+        self._path = Path(path)
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        self._ensure_table()
+
+    def _ensure_table(self) -> None:
+        with sqlite3.connect(self._path) as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS etl_cursors (
+                    scope_name TEXT PRIMARY KEY,
+                    last_updated_at TEXT,
+                    last_issue_key TEXT,
+                    resume_page_at INTEGER DEFAULT 0
+                )
+                """
+            )
+            conn.commit()
+
+    def load(self, scope_name: str) -> Cursor:
+        with sqlite3.connect(self._path) as conn:
+            cur = conn.execute(
+                "SELECT last_updated_at, last_issue_key, resume_page_at FROM etl_cursors WHERE scope_name = ?",
+                (scope_name,),
+            )
+            row = cur.fetchone()
+        if not row:
+            return Cursor()
+        last_updated_at, last_issue_key, resume_page_at = row
+        return Cursor(
+            last_updated_at=str(last_updated_at) if last_updated_at is not None else None,
+            last_issue_key=last_issue_key,
+            resume_page_at=resume_page_at or 0,
+        )
+
+    def save(self, scope_name: str, cursor: Cursor) -> None:
+        with sqlite3.connect(self._path) as conn:
+            conn.execute(
+                """
+                INSERT INTO etl_cursors (scope_name, last_updated_at, last_issue_key, resume_page_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(scope_name) DO UPDATE SET
+                    last_updated_at = excluded.last_updated_at,
+                    last_issue_key = excluded.last_issue_key,
+                    resume_page_at = excluded.resume_page_at
+                """,
+                (scope_name, cursor.last_updated_at, cursor.last_issue_key, cursor.resume_page_at),
+            )
+            conn.commit()
+
+
+__all__ = [
+    "Cursor",
+    "StateStore",
+    "InMemoryStateStore",
+    "PostgresStateStore",
+    "SQLiteStateStore",
+]

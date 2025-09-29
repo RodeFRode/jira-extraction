@@ -40,12 +40,18 @@ incremental operation, typed modules, and ease of local testing.
    cp .env.example .env
    ```
 
-   The application loads this file automatically on startup.  Populate the
-   following variables with your credentials:
+  The application loads this file automatically on startup.  Populate the
+  following variables with values that match your environment:
 
-   - `JIRA_PAT`: Personal access token used for Jira authentication.
-   - `DATABASE_URL`: PostgreSQL connection string that points to the reporting
-     database where the schema from `sql/schema.sql` has been applied.
+  - `JIRA_BASE_URL`: Base URL for your Jira Data Center instance.
+  - `JIRA_CA_BUNDLE`: Optional path to a PEM encoded root certificate used to
+    verify HTTPS requests.  Leave empty to use the system trust store.
+  - `JIRA_PAT`: Personal access token used for Jira authentication.
+  - `DATABASE_URL`: PostgreSQL connection string that points to the reporting
+    database where the schema from `sql/schema.sql` has been applied.
+  - `JIRA_PRINT_ONLY`: Optional flag (`true`/`false`) that forces the CLI to
+    skip all database writes and instead print each transformed issue to the
+    console.  Defaults to `false` when unset.
 
 3. **Review configuration**
 
@@ -72,6 +78,14 @@ incremental operation, typed modules, and ease of local testing.
    The incremental job resumes from the stored cursor and applies the safety
    skew to avoid missing updates near the resume boundary.  Rerunning the sync
    after an interruption will continue from the last committed page.
+
+   Both backfill and sync accept a `--local-db` flag that bypasses the
+   PostgreSQL loader and instead writes every extracted page to a local
+   `jira.db` SQLite file alongside resumable cursor checkpoints.  Use
+   `--local-db-path` to override the destination file if required.  When
+   `JIRA_PRINT_ONLY=true` is present in the environment, the commands ignore the
+   `--local-db` flag, stream each page to standard output, and keep cursor state
+   in-memory so nothing is persisted to disk.
 
 6. **Inspect data or metadata**
 
